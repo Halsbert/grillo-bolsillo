@@ -1,0 +1,7 @@
+{
+  "appId": "app.grillo.bolsillo",
+  "appName": "Grillo",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "android": { "backgroundColor": "#1b1f22", "adjustMarginsForEdgeToEdge": "auto" }
+}
