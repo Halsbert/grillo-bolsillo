@@ -229,6 +229,8 @@ body.xs .fk i { display: none; }
 body.xs .fhead { height: 22px; }
 body.xs #mh { height: 30px; }
 body.edge #m { padding-top: 32px; padding-bottom: 22px; }
+.fd.auto .fl::after { content: ' AUTO'; color: var(--accent); }
+.fd.auto .ft::before { box-shadow: inset 0 1px 2px rgba(0, 0, 0, .8), 0 0 0 1px rgba(255, 90, 31, .55); }
 </style>
 </head>
 <body>
@@ -5563,7 +5565,7 @@ const MP3 = (() => {
   return { encode, rates: Object.keys(SRI).map(Number) };
 })();
 
-const GRILLO_VER = 'v8 · 10 nov';
+const GRILLO_VER = 'v9 · 10 nov';
 /* ══════════════════════════════════════════════════════════════════
    GRILLO · guardar / abrir proyectos y exportar WAV, MP3, stems y MIDI
    ══════════════════════════════════════════════════════════════════ */
@@ -5892,6 +5894,30 @@ const UI = {
   },
   toggleRecArm() { this.recArm = !this.recArm; AU.send({ t: 'recarm', on: this.recArm }); App.lastLane = null; this.refreshFoot(); App.msg(this.recArm ? 'GRABAR EN EL PATRÓN' : 'GRABACIÓN APAGADA'); },
 
+  /* ── automatizaciones (carriles grabados con GRABAR + mover un fader) ── */
+  lanesOf(si) { const pat = App.P.patterns[App.P.cur]; return si < 0 ? pat.master.lanes : pat.tracks[si].lanes; },
+  laneName(si, id) { const d = pref({ s: si, id }); return d ? refName({ s: si, id }) : id.toUpperCase(); },
+  clearLane(si, id) {
+    const ln = this.lanesOf(si); if (!ln[id]) return;
+    delete ln[id]; App.lastLane = null; App.markPat(App.P.cur); App.touchS(si); App.commit();
+    App.msg('BORRADA: ' + this.laneName(si, id)); NAT.buzz(true); this.refreshFaders();
+  },
+  clearLanes(si) {
+    const ln = this.lanesOf(si), n = Object.keys(ln).length; if (!n) return;
+    for (const k of Object.keys(ln)) delete ln[k];
+    App.lastLane = null; App.markPat(App.P.cur); App.touchS(si); App.commit();
+    App.msg(n + ' AUTOMATIZACIONES BORRADAS'); NAT.buzz(true); this.refreshFaders();
+  },
+  autoSheet(si) {
+    const ln = this.lanesOf(si), ids = Object.keys(ln), box = h('div', { class: 'list' });
+    const who = si < 0 ? 'MASTER' : pad2(si + 1) + ' ' + (App.P.sounds[si].name || 'SONIDO');
+    box.append(h('p', { class: 'note' }, ids.length ? 'Grabadas en el patrón ' + pad2(App.P.cur + 1) + '. Toca una para borrarla.' : 'Este sonido no tiene automatizaciones en el patrón ' + pad2(App.P.cur + 1) + '.'));
+    for (const id of ids) box.append(h('button', { class: 'row smp', onclick: () => { this.clearLane(si, id); this.autoSheet(si); } }, h('b', null, this.laneName(si, id)), h('i', null, 'BORRAR ×')));
+    if (ids.length > 1) box.append(h('button', { class: 'row danger', onclick: () => { this.clearLanes(si); this.closeModal(); } }, 'Borrar todas'));
+    box.append(h('p', { class: 'note' }, 'Consejo: también puedes mantener pulsado un fader marcado con AUTO para borrar la suya.'));
+    this.modal('AUTOMATIZACIONES · ' + who, box);
+  },
+
   /* ── construcción ── */
   build() {
     if (this.built) { this.refresh(); return; }
@@ -6092,6 +6118,8 @@ const UI = {
     } else if (this.mode === 'pat') {
       const cur = pl ? A.playPat : -1; if (cur !== this.lastPh) { for (let i = 0; i < 16; i++) ks[i].classList.toggle('ph', i === cur); this.lastPh = cur; }
     }
+    // las automatizaciones nuevas (grabando) se marcan sin esperar a otro refresco
+    if (!this._at || now - this._at > 400) { this._at = now; const k = this.mode + ':' + App.sel + ':' + App.P.cur + ':' + Object.keys(this.lanesOf(this.mode === 'pat' ? -1 : App.sel)).join(','); if (k !== this._ak) { this._ak = k; this.refreshFaders(); } }
     const play = $('#bPlay'); if (play.classList.contains('on') !== pl) { play.classList.toggle('on', pl); NAT.awake(pl); }
     const r = $('#bRec'), ron = this.recArm || A.rec.on; if (r.classList.contains('on') !== ron) r.classList.toggle('on', ron);
     r.classList.toggle('mic', !!A.rec.on);
@@ -6108,17 +6136,25 @@ const UI = {
       const tr = el.querySelector('.ft').getBoundingClientRect();
       drag = { y: e.clientY, n0: d.get(), h: tr.height, moved: false, t: performance.now() };
       this.last = d; el.classList.add('act'); if (d.focus) LV.focus(d.focus());
+      // mantener sin mover: borrar la automatización de este fader
+      drag.lt = setTimeout(() => {
+        if (!drag || drag.moved) return;
+        const ref = d.focus && d.focus(); drag.long = true;
+        if (ref && this.lanesOf(ref.s)[ref.id]) this.confirmClear(ref.s, ref.id); else App.msg('SIN AUTOMATIZACIÓN');
+      }, 650);
     });
     el.addEventListener('pointermove', (e) => {
       if (!drag) return; const d = this.fdefs[i]; if (!d) return;
       const dy = drag.y - e.clientY; if (!drag.moved && Math.abs(dy) < 3) return;
-      drag.moved = true;
+      if (drag.long) return;
+      drag.moved = true; clearTimeout(drag.lt);
       const n = clamp(drag.n0 + dy / (drag.h * 1.15), 0, 1);
       this.applyF(d, n);
     });
     const end = () => {
-      if (!drag) return; el.classList.remove('act');
+      if (!drag) return; el.classList.remove('act'); clearTimeout(drag.lt);
       const d = this.fdefs[i];
+      if (drag.long) { drag = null; return; }
       if (!drag.moved && d) {
         const t = performance.now();
         if (t - lastTap < 320 && d.def != null) { this.applyF(d, d.def); App.msg(d.label + ' POR DEFECTO'); lastTap = 0; } else lastTap = t;
@@ -6139,10 +6175,11 @@ const UI = {
   },
   paintF(i) {
     const el = $$('#mf .fd')[i], d = this.fdefs[i]; if (!el) return;
-    if (!d || d.off) { el.classList.add('off'); el.children[0].textContent = d ? d.label : ''; el.children[2].textContent = '—'; el.style.setProperty('--v', 0); return; }
+    if (!d || d.off) { el.classList.remove('auto'); el.classList.add('off'); el.children[0].textContent = d ? d.label : ''; el.children[2].textContent = '—'; el.style.setProperty('--v', 0); return; }
     el.classList.remove('off');
     const n = d.get(); el.style.setProperty('--v', n);
     el.classList.toggle('lock', !!(d.locked && d.locked()));
+    const ref = d.focus && d.focus(); el.classList.toggle('auto', !!(ref && this.lanesOf(ref.s)[ref.id]));
     el.children[0].textContent = d.label; el.children[2].textContent = d.fmt();
   },
   refreshFaders() {
@@ -6155,7 +6192,8 @@ const UI = {
     const tag = App.selStep >= 0 && this.mode !== 'pat' ? ' · PASO ' + pad2(App.selStep + 1) : '';
     $('#fName').textContent = pg.n + tag + '  ' + (pi + 1) + '/' + pages.length;
     $('#mf').classList.toggle('plock', !!tag);
-    $('#lcdLbl').textContent = this.mode === 'pat' ? 'MASTER' : pad2(App.sel + 1) + ' ' + (App.snd().name || '').slice(0, 12);
+    const na = Object.keys(this.lanesOf(this.mode === 'pat' ? -1 : App.sel)).length;
+    $('#lcdLbl').textContent = (this.mode === 'pat' ? 'MASTER' : pad2(App.sel + 1) + ' ' + (App.snd().name || '').slice(0, 12)) + (na ? ' · AUTO ' + na : '');
   },
   page(d) {
     const pages = this.pages(), key = this.mode === 'pat' ? 'mst' : 'snd';
@@ -6270,6 +6308,13 @@ const UI = {
     }
     if (hd.fx.length > 2 && slot === 1) type.label = 'EFECTO (+' + (hd.fx.length - 2) + ')';
     return out;
+  },
+  confirmClear(si, id) {
+    const box = h('div', { class: 'list' },
+      h('p', { class: 'note' }, this.laneName(si, id) + ' tiene una automatización grabada en el patrón ' + pad2(App.P.cur + 1) + '.'),
+      h('button', { class: 'row danger', onclick: () => { this.closeModal(); this.clearLane(si, id); } }, 'Borrar esta automatización'),
+      h('button', { class: 'row', onclick: () => { this.closeModal(); this.autoSheet(si); } }, 'Ver todas las de ' + (si < 0 ? 'MASTER' : 'este sonido')));
+    this.modal('AUTOMATIZACIÓN', box);
   },
   setFx(si, slot, type) {
     const A = App, hd = holderOf(si), old = hd.fx[slot];
@@ -6391,6 +6436,7 @@ const UI = {
       b(s.mute ? 'Quitar silencio' : 'Silenciar', () => { s.mute = !s.mute; A.touchS(i); A.commit(); this.refresh(); }),
       b(s.solo ? 'Quitar solo' : 'Solo', () => { s.solo = !s.solo; A.touchS(i); A.commit(); this.refresh(); }),
       b('Renombrar', () => { const n = prompt('Nombre del sonido', s.name || ''); if (n != null) { s.name = n.toUpperCase().slice(0, 14); A.touchS(i); A.commit(); this.refresh(); } }),
+      b('Automatizaciones' + (Object.keys(this.lanesOf(i)).length ? ' (' + Object.keys(this.lanesOf(i)).length + ')' : ''), () => this.autoSheet(i)),
       b('Copiar sonido', () => { A.clip.snd = JSON.parse(JSON.stringify(s)); A.msg('SONIDO COPIADO'); }),
       b('Pegar sonido aquí', () => { if (!A.clip.snd) return; A.P.sounds[i] = Object.assign(JSON.parse(JSON.stringify(A.clip.snd))); A.touchS(i); A.commit(); this.refresh(); }, A.clip.snd ? '' : 'dis'),
       b('Borrar sus pasos en este patrón', () => { const tr = A.P.patterns[A.P.cur].tracks[i]; tr.steps = new Array(64).fill(null); A.selStep = -1; A.markPat(A.P.cur); A.commit(); this.refresh(); }, 'danger')));
@@ -6435,7 +6481,9 @@ const UI = {
       h('h4', null, 'SONIDO ' + pad2(A.sel + 1)),
       h('div', { class: 'list' },
         b('Cargar audio del móvil', () => this.pickAudio(A.sel)),
-        b('Usar una muestra guardada', () => this.samplePicker(A.sel))),
+        b('Usar una muestra guardada', () => this.samplePicker(A.sel)),
+        b('Automatizaciones de este sonido', () => this.autoSheet(A.sel)),
+        b('Automatizaciones del master', () => this.autoSheet(-1))),
       h('h4', null, 'AJUSTES'),
       row('Tema', seg([['grafito', 'GRAFITO'], ['verde', 'VERDE'], ['hueso', 'HUESO']], () => S.theme || 'grafito', (v) => { S.theme = v; this.applyTheme(); })),
       row('Metrónomo', seg([[false, 'NO'], [true, 'SÍ']], () => !!A.P.metro, (v) => { A.P.metro = v; A.touchG(); })),
@@ -6454,7 +6502,8 @@ const UI = {
         h('p', null, h('b', null, 'PATRÓN'), ' cambia de patrón. CADENA: toca patrones para encadenarlos. En este modo los faders son el tempo, el swing, el volumen y los efectos del master.'),
         h('p', null, h('b', null, 'FX'), ' los 32 punch-in del PO, en dos bancos. Mantén CLEAR para borrar los que grabaste.'),
         h('p', null, h('b', null, 'GRABAR'), ' tócalo para grabar en el patrón (notas, punch-in y movimientos de fader). Mantenlo para grabar con el micro en el sonido elegido.'),
-        h('p', null, h('b', null, 'FADERS'), ' arrastra hacia arriba o abajo; doble toque vuelve al valor de fábrica. ‹ › cambian de página. INCLINAR mueve el último fader tumbando el móvil.')),
+        h('p', null, h('b', null, 'FADERS'), ' arrastra hacia arriba o abajo; doble toque vuelve al valor de fábrica. ‹ › cambian de página. INCLINAR mueve el último fader tumbando el móvil.'),
+        h('p', null, h('b', null, 'AUTOMATIZACIONES'), ' se graban si mueves un fader con GRABAR encendido y sonando. Un fader con automatización lleva la marca AUTO: mantenlo pulsado para borrarla. Todas están en el menú de cada sonido (mantenerlo en SONIDO).')),
       h('p', { class: 'note ver' }, 'GRILLO DE BOLSILLO · ' + GRILLO_VER + ' · los proyectos .grillo son los mismos que en el ordenador'));
     this.modal('MENÚ', body, { cls: 'tall' });
   },
