@@ -1,4 +1,4 @@
-/* Grillo de bolsillo: funciona sin conexión (versión v9 · 10 nov mwacid7d) */
+/* Grillo de bolsillo: funciona sin conexión (versión v10 · 12 nov mwd3r85z) */
 const C = 'grillo-__VER__';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(C).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())); });
